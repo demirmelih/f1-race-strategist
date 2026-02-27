@@ -1,0 +1,10 @@
+# Python environment and cache
+venv/
+__pycache__/
+*.pyc
+
+# F1 Data Cache (Do not upload data to GitHub)
+f1_cache/
+
+# Environment Variables (Contains our database password!)
+.env

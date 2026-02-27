@@ -4,6 +4,9 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
 
+from database import Base, engine
+import models  # noqa: F401 – registers all models with Base.metadata
+
 # ---------------------------------------------------------------------------
 # Cache setup
 # fastf1 caches downloaded session data locally to avoid redundant API calls.
@@ -21,6 +24,21 @@ app = FastAPI(
     description="Serves F1 telemetry data powered by the fastf1 library.",
     version="1.0.0",
 )
+
+
+# ---------------------------------------------------------------------------
+# Startup: create database tables
+# ---------------------------------------------------------------------------
+@app.on_event("startup")
+def create_tables():
+    """Create all SQLAlchemy-managed tables if they don't already exist."""
+    try:
+        Base.metadata.create_all(bind=engine)
+        print("✅ Database tables created / verified successfully.")
+    except Exception as e:
+        print(f"⚠️  Could not connect to database on startup: {e}")
+        print("   The server will still run; DB-dependent endpoints may fail.")
+
 
 # Allow all origins so the frontend (any port / domain) can reach this API.
 app.add_middleware(
