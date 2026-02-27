@@ -1,46 +1,33 @@
-import fastf1
-import pandas as pd
-from fastapi import FastAPI, HTTPException
+"""
+main.py — F1 Race Strategist API
+
+Data is served from PostgreSQL (via SQLAlchemy).
+Use populate_db.py to seed the database with fastf1 data first.
+"""
+
+from typing import Generator, List
+
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pathlib import Path
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
-from database import Base, engine
-import models  # noqa: F401 – registers all models with Base.metadata
-
-# ---------------------------------------------------------------------------
-# Cache setup
-# fastf1 caches downloaded session data locally to avoid redundant API calls.
-# We point it to a dedicated folder in the project root.
-# ---------------------------------------------------------------------------
-CACHE_DIR = Path(__file__).parent / "f1_cache"
-CACHE_DIR.mkdir(exist_ok=True)
-fastf1.Cache.enable_cache(str(CACHE_DIR))
+from database import Base, SessionLocal, engine
+import models  # noqa: F401 – registers all ORM models with Base.metadata
 
 # ---------------------------------------------------------------------------
 # App initialisation
 # ---------------------------------------------------------------------------
 app = FastAPI(
     title="F1 Race Strategist API",
-    description="Serves F1 telemetry data powered by the fastf1 library.",
-    version="1.0.0",
+    description=(
+        "Serves F1 telemetry data from a PostgreSQL database. "
+        "Populate the DB first with populate_db.py."
+    ),
+    version="2.0.0",
 )
 
-
-# ---------------------------------------------------------------------------
-# Startup: create database tables
-# ---------------------------------------------------------------------------
-@app.on_event("startup")
-def create_tables():
-    """Create all SQLAlchemy-managed tables if they don't already exist."""
-    try:
-        Base.metadata.create_all(bind=engine)
-        print("✅ Database tables created / verified successfully.")
-    except Exception as e:
-        print(f"⚠️  Could not connect to database on startup: {e}")
-        print("   The server will still run; DB-dependent endpoints may fail.")
-
-
-# Allow all origins so the frontend (any port / domain) can reach this API.
+# Allow all origins so any frontend (any host/port) can consume the API.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -50,108 +37,140 @@ app.add_middleware(
 
 
 # ---------------------------------------------------------------------------
-# Endpoint: fastest-lap telemetry
+# Startup: ensure tables exist
 # ---------------------------------------------------------------------------
+@app.on_event("startup")
+def create_tables() -> None:
+    """Create all SQLAlchemy-managed tables if they don't already exist."""
+    try:
+        Base.metadata.create_all(bind=engine)
+        print("✅ Database tables created / verified successfully.")
+    except Exception as exc:
+        print(f"⚠️  Could not reach database on startup: {exc}")
+        print("   The server will still run; DB-dependent endpoints may fail.")
+
+
+# ---------------------------------------------------------------------------
+# Database dependency
+# ---------------------------------------------------------------------------
+def get_db() -> Generator:
+    """
+    FastAPI dependency that opens a DB session for the duration of a request
+    and guarantees it is closed afterward — even if an exception occurs.
+    """
+    db: Session = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+# ---------------------------------------------------------------------------
+# Pydantic response schemas
+# ---------------------------------------------------------------------------
+class RaceResponse(BaseModel):
+    """Shape of a single race object returned by the API."""
+
+    id: int
+    year: int
+    grand_prix: str
+    session: str
+
+    # Allow Pydantic to read attributes from SQLAlchemy ORM objects directly.
+    model_config = {"from_attributes": True}
+
+
+class TelemetryResponse(BaseModel):
+    """Shape of a single telemetry data point returned by the API."""
+
+    id: int
+    race_id: int
+    driver_id: int
+    time: float          # milliseconds from lap start
+    speed: int           # km/h
+    gear: int
+    x_coordinate: float  # circuit X position
+    y_coordinate: float  # circuit Y position
+
+    model_config = {"from_attributes": True}
+
+
+# ---------------------------------------------------------------------------
+# Endpoints
+# ---------------------------------------------------------------------------
+
 @app.get(
-    "/api/race/{year}/{grand_prix}/{session}/fastest-lap",
-    summary="Fastest-lap telemetry",
-    response_description="Car telemetry for the fastest lap of the session",
+    "/api/races",
+    response_model=List[RaceResponse],
+    summary="List all available races",
+    response_description="All races currently stored in the database",
 )
-async def get_fastest_lap_telemetry(year: int, grand_prix: str, session: str):
-    """
-    Returns telemetry data (Time, Speed, Gear, X, Y) for the driver who set
-    the overall fastest lap in the given session.
-
-    Path parameters
-    ---------------
-    year        : Season year, e.g. 2023
-    grand_prix  : Event name or round number recognised by fastf1,
-                  e.g. "Bahrain" or "Monaco"
-    session     : Session identifier – "R" (Race), "Q" (Qualifying),
-                  "FP1", "FP2", "FP3", "S" (Sprint), etc.
-    """
-    try:
-        # Load the session. fastf1 fetches data from the Ergast / F1 APIs and
-        # caches the result locally for subsequent requests.
-        evt = fastf1.get_session(year, grand_prix, session)
-        evt.load(telemetry=True, laps=True, weather=False, messages=False)
-    except Exception as exc:
+def list_races(db: Session = Depends(get_db)) -> List[models.Race]:
+    """Return every race row from the Races table."""
+    races = db.query(models.Race).all()
+    if not races:
         raise HTTPException(
             status_code=404,
-            detail=f"Could not load session '{session}' for {year} {grand_prix}: {exc}",
+            detail="No races found. Run populate_db.py to seed the database.",
         )
+    return races
 
-    # Pick the single fastest lap across all drivers in the session.
-    fastest_lap = evt.laps.pick_fastest()
 
-    if fastest_lap is None or fastest_lap.empty:
+@app.get(
+    "/api/telemetry/{race_id}/{driver_id}",
+    response_model=List[TelemetryResponse],
+    summary="Telemetry for a specific race and driver",
+    response_description=(
+        "Time-ordered telemetry data points for the given race and driver"
+    ),
+)
+def get_telemetry(
+    race_id: int,
+    driver_id: int,
+    db: Session = Depends(get_db),
+) -> List[models.Telemetry]:
+    """
+    Query the Telemetry table filtered by race_id and driver_id,
+    ordered by the time column ascending.
+    """
+    # Validate that the referenced race actually exists.
+    race = db.query(models.Race).filter(models.Race.id == race_id).first()
+    if race is None:
         raise HTTPException(
             status_code=404,
-            detail="No fastest lap found for this session.",
+            detail=f"Race with id={race_id} not found.",
         )
 
-    driver_code = fastest_lap["Driver"]
-    lap_time = str(fastest_lap["LapTime"])  # timedelta → readable string
-
-    try:
-        # Retrieve the detailed car telemetry for that lap.
-        # add_distance=True appends a running distance channel (optional but useful).
-        telemetry: pd.DataFrame = fastest_lap.get_car_data().add_distance()
-    except Exception as exc:
+    # Validate that the referenced driver actually exists.
+    driver = (
+        db.query(models.Driver).filter(models.Driver.id == driver_id).first()
+    )
+    if driver is None:
         raise HTTPException(
-            status_code=500,
-            detail=f"Failed to retrieve telemetry: {exc}",
+            status_code=404,
+            detail=f"Driver with id={driver_id} not found.",
         )
 
-    # ------------------------------------------------------------------
-    # Column selection
-    # We only expose the columns the frontend needs.  Rename them to more
-    # readable keys while we're at it.
-    # ------------------------------------------------------------------
-    column_map = {
-        "Time": "time_ms",   # timedelta – converted below
-        "Speed": "speed_kmh",
-        "nGear": "gear",
-        "X": "x",
-        "Y": "y",
-    }
+    telemetry = (
+        db.query(models.Telemetry)
+        .filter(
+            models.Telemetry.race_id == race_id,
+            models.Telemetry.driver_id == driver_id,
+        )
+        .order_by(models.Telemetry.time)
+        .all()
+    )
 
-    # Keep only the columns that actually exist in this session's data.
-    existing_cols = [c for c in column_map if c in telemetry.columns]
-    telemetry = telemetry[existing_cols].rename(columns=column_map)
+    if not telemetry:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"No telemetry found for race_id={race_id} and"
+                f" driver_id={driver_id}."
+            ),
+        )
 
-    # ------------------------------------------------------------------
-    # Data cleaning
-    # fastf1 can return NaN for missing samples.  Drop any row that has at
-    # least one NaN so the JSON payload stays consistent and type-safe.
-    # ------------------------------------------------------------------
-    telemetry = telemetry.dropna()
-
-    # The "Time" channel is a pandas Timedelta.  JSON can't serialise that
-    # natively, so convert each value to total milliseconds (int).
-    if "time_ms" in telemetry.columns:
-        telemetry["time_ms"] = telemetry["time_ms"].dt.total_seconds() * 1000
-        telemetry["time_ms"] = telemetry["time_ms"].astype(int)
-
-    # Convert gear to plain int (it arrives as float64 after dropna).
-    if "gear" in telemetry.columns:
-        telemetry["gear"] = telemetry["gear"].astype(int)
-
-    # ------------------------------------------------------------------
-    # Serialisation
-    # Convert the DataFrame to a list of dicts – the safest, most portable
-    # JSON structure for a tabular dataset.
-    # ------------------------------------------------------------------
-    records = telemetry.to_dict(orient="records")
-
-    return {
-        "year": year,
-        "grand_prix": grand_prix,
-        "session": session,
-        "driver": driver_code,
-        "lap_time": lap_time,
-        "telemetry": records,
-    }
+    return telemetry
 
 
 # To run the server locally:
