@@ -1,16 +1,17 @@
 // Server Component — runs on the server, no "use client" needed.
 
+import Link from "next/link";
+
 interface Race {
+  id: number;
   year: number;
   grand_prix: string;
   session: string;
-  [key: string]: unknown;
 }
 
 async function getRaces(): Promise<Race[]> {
   try {
     const res = await fetch("http://127.0.0.1:8000/api/races", {
-      // Disable Next.js cache so we always get fresh data in dev
       cache: "no-store",
     });
     if (!res.ok) throw new Error(`API responded with status ${res.status}`);
@@ -22,7 +23,10 @@ async function getRaces(): Promise<Race[]> {
 
 function RaceCard({ race }: { race: Race }) {
   return (
-    <div className="group relative flex flex-col gap-3 rounded-xl border border-zinc-800 bg-zinc-900 p-5 shadow-lg transition-all duration-200 hover:border-red-600 hover:shadow-red-900/30 hover:shadow-xl">
+    <Link
+      href={`/race/${race.id}`}
+      className="group relative flex flex-col gap-3 rounded-xl border border-zinc-800 bg-zinc-900 p-5 shadow-lg transition-all duration-200 hover:border-red-600 hover:shadow-red-900/30 hover:shadow-xl hover:-translate-y-0.5 cursor-pointer"
+    >
       {/* Red accent bar */}
       <span className="absolute left-0 top-0 h-full w-1 rounded-l-xl bg-red-600 opacity-0 transition-opacity duration-200 group-hover:opacity-100" />
 
@@ -47,7 +51,12 @@ function RaceCard({ race }: { race: Race }) {
         </svg>
         <span className="uppercase tracking-wide">{race.session}</span>
       </div>
-    </div>
+
+      {/* Arrow indicator */}
+      <span className="absolute right-4 top-1/2 -translate-y-1/2 text-zinc-600 transition-all duration-200 group-hover:text-red-500 group-hover:translate-x-1">
+        →
+      </span>
+    </Link>
   );
 }
 
@@ -86,7 +95,6 @@ export default async function Home() {
       {/* Top nav bar */}
       <header className="sticky top-0 z-10 border-b border-zinc-800 bg-zinc-950/80 backdrop-blur">
         <div className="mx-auto flex max-w-6xl items-center gap-3 px-6 py-4">
-          {/* F1-style logo mark */}
           <span className="flex h-7 w-7 items-center justify-center rounded bg-red-600 text-xs font-black leading-none text-white">
             F1
           </span>
@@ -108,7 +116,7 @@ export default async function Home() {
           </h2>
           <p className="mt-1 text-sm text-zinc-500">
             {races.length > 0
-              ? `${races.length} session${races.length !== 1 ? "s" : ""} loaded`
+              ? `${races.length} session${races.length !== 1 ? "s" : ""} loaded — click a race to view telemetry`
               : "Fetching sessions from the API…"}
           </p>
         </div>
@@ -119,8 +127,8 @@ export default async function Home() {
         {/* Race grid */}
         {races.length > 0 && (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {races.map((race, i) => (
-              <RaceCard key={i} race={race} />
+            {races.map((race) => (
+              <RaceCard key={race.id} race={race} />
             ))}
           </div>
         )}
