@@ -27,10 +27,13 @@ app = FastAPI(
     version="2.0.0",
 )
 
-# Allow all origins so any frontend (any host/port) can consume the API.
+# Allow only the specified frontend origins to consume the API.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ],
     allow_methods=["*"],
     allow_headers=["*"],
 )
