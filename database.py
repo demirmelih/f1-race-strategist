@@ -13,7 +13,12 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     raise ValueError("DATABASE_URL is not set. Please add it to your .env file.")
 
-engine = create_engine(DATABASE_URL)
+engine = create_engine(
+    DATABASE_URL,
+    connect_args={"options": "-c statement_timeout=120000"},  # 120s for ETL
+    pool_pre_ping=True,
+    pool_recycle=280,       # recycle before Supabase's 5-min idle kill
+)
 
 # Each request gets its own session, which is closed when the request is done.
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

@@ -1,25 +1,9 @@
-// Server Component — runs on the server, no "use client" needed.
+// Server Component — data fetching happens on the server.
 
 import Link from "next/link";
-
-interface Race {
-  id: number;
-  year: number;
-  grand_prix: string;
-  session: string;
-}
-
-async function getRaces(): Promise<Race[]> {
-  try {
-    const res = await fetch("http://127.0.0.1:8000/api/races", {
-      cache: "no-store",
-    });
-    if (!res.ok) throw new Error(`API responded with status ${res.status}`);
-    return res.json();
-  } catch {
-    return [];
-  }
-}
+import BackendStatus from "@/components/ui/BackendStatus";
+import { getRaces } from "@/lib/api";
+import type { Race } from "@/types";
 
 function RaceCard({ race }: { race: Race }) {
   return (
@@ -77,11 +61,10 @@ function ErrorBanner() {
         />
       </svg>
       <p className="text-sm font-medium">
-        Could not connect to the API at{" "}
+        Could not connect to the API. Make sure the backend server is running:{" "}
         <code className="rounded bg-red-900/50 px-1 py-0.5 font-mono text-xs text-red-300">
-          http://127.0.0.1:8000/api/races
+          uvicorn main:app --reload --port 8000
         </code>
-        . Make sure the backend server is running.
       </p>
     </div>
   );
@@ -101,7 +84,10 @@ export default async function Home() {
           <h1 className="text-sm font-bold uppercase tracking-[0.2em] text-zinc-100">
             Race Strategist
           </h1>
-          <div className="ml-auto h-2 w-2 animate-pulse rounded-full bg-green-500" title="Backend live" />
+          {/* BackendStatus is a Client Component — polls /api/health every 30s */}
+          <div className="ml-auto">
+            <BackendStatus />
+          </div>
         </div>
       </header>
 
